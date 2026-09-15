@@ -60,6 +60,9 @@ class GitHubClient:
         return await self.request("POST", f"/repos/{repository}/issues",
                                   json={"title": title, "body": body, "labels": labels})
 
+    async def update_issue_body(self, repository, number, body):
+        return await self.request("PATCH", f"/repos/{repository}/issues/{number}", json={"body": body})
+
     async def project(self, route):
         owner_type = route.get("project_owner_type", "organization")
         if owner_type not in {"user", "organization"}:

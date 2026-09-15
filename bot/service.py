@@ -34,7 +34,7 @@ def resolve_route(routes, kind, repository=None):
 class PartialMigration(RuntimeError):
     def __init__(self, url):
         self.url = url
-        super().__init__("Issue создан, но Project не обновлён. Повторите команду для завершения.")
+        super().__init__("Issue существует, но миграция не завершена. Повторите команду для завершения.")
 
 
 class MigrationService:
@@ -50,7 +50,7 @@ class MigrationService:
     def close(self):
         self.db.close()
 
-    async def migrate(self, tracker, route, source_key, source_url=None):
+    async def migrate(self, tracker, route, source_key, source_url=None, *, update_existing=False):
         repo = route["repository"]
         key = hashlib.sha256(f"{repo}:{source_key}".encode()).hexdigest()
         marker = f"<!-- ss220-tracker:{key} -->"
@@ -60,15 +60,23 @@ class MigrationService:
             row = self.db.execute("SELECT issue FROM migrations WHERE key=?", (key,)).fetchone()
             issue = json.loads(row[0]) if row else await self.github.find_issue(repo, marker)
             reused = issue is not None
-            if not issue:
+            if not issue or update_existing:
                 body = tracker.issue_body()
                 if source_url:
                     body += f"\n\n## Источник\n\n{source_url}"
                 body += f"\n\n{marker}"
                 if len(body) > 60000:
                     raise ValueError("Трекер слишком большой для одного Issue")
+            if not issue:
                 await self.github.ensure_labels(repo, labels)
                 issue = await self.github.create_issue(repo, tracker.title, body, labels)
+            elif update_existing:
+                # A forum can receive new replies after the first migration. Refresh only
+                # the generated body while preserving the human-edited title/labels/state.
+                try:
+                    issue = await self.github.update_issue_body(repo, issue["number"], body)
+                except Exception as exc:
+                    raise PartialMigration(issue["html_url"]) from exc
             self.db.execute("INSERT OR REPLACE INTO migrations VALUES (?,?)", (key, json.dumps(issue)))
             self.db.commit()
             try:
