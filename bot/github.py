@@ -46,14 +46,18 @@ class GitHubClient:
     async def find_issue(self, repository, marker):
         # REST pagination avoids the lag of GitHub search indexing.
         page = 1
+        found = None
         while True:
             batch = await self.request("GET", f"/repos/{repository}/issues",
                                        params={"state": "all", "per_page": 100, "page": page})
             for issue in batch:
-                if "pull_request" not in issue and marker in (issue.get("body") or ""):
-                    return issue
+                body = issue.get("body") or ""
+                if "pull_request" not in issue and marker in body:
+                    if found is not None:
+                        raise GitHubError("Несколько Issue связаны с источником; укажите issue_number")
+                    found = issue
             if len(batch) < 100:
-                return None
+                return found
             page += 1
 
     async def create_issue(self, repository, title, body, labels):
@@ -62,6 +66,12 @@ class GitHubClient:
 
     async def update_issue_body(self, repository, number, body):
         return await self.request("PATCH", f"/repos/{repository}/issues/{number}", json={"body": body})
+
+    async def get_issue(self, repository, number):
+        issue = await self.request("GET", f"/repos/{repository}/issues/{number}")
+        if "pull_request" in issue:
+            raise GitHubError("Указан Pull Request, а нужен Issue")
+        return issue
 
     async def project(self, route):
         owner_type = route.get("project_owner_type", "organization")

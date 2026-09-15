@@ -50,6 +50,7 @@ def message(message_id, text):
 def thread(guild, thread_id=100, messages=None, tags=("bug",)):
     result = channel(discord.Thread, guild, thread_id)
     result.parent_id = 1385519706781253632
+    result.parent = channel(discord.ForumChannel, guild, result.parent_id)
     result.name = f"Post {thread_id}"
     result.jump_url = f"https://discord.com/channels/{guild.id}/{thread_id}"
     result.created_at = EARLIER
@@ -158,7 +159,7 @@ def test_provided_forum_link_and_cross_guild_rejection():
     asyncio.run(scenario())
 
 
-def test_no_argument_uses_parent_forum_and_explicit_reply_uses_entire_thread():
+def test_no_argument_uses_parent_forum_and_selected_comment_is_separate():
     async def scenario():
         guild, member = context()
         post = thread(guild)
@@ -166,9 +167,15 @@ def test_no_argument_uses_parent_forum_and_explicit_reply_uses_entire_thread():
         guild.fetch_channel.return_value = forum
         interaction = SimpleNamespace(guild=guild, guild_id=guild.id, user=member, channel=post)
         assert await resolve_source(interaction) == (forum, None)
-        source = await read_single(post, 999, member, BEFORE)
-        assert source.key == "discord:100"
-        post.fetch_message.assert_not_called()
+        post.fetch_message.return_value = message(999, "Тип: баг\nОписание: selected comment")
+        source = await read_single(post, 999, member, BEFORE, scope="message")
+        assert source.key == "discord-message:999"
+        post.fetch_message.assert_awaited_once_with(999)
+        post.history.assert_not_called()
+        assert source.forum_id == post.parent_id
+        assert source.message_id == 999
+        assert source.thread_id == post.id
+        assert source.scope == "message"
     asyncio.run(scenario())
 
 
@@ -228,20 +235,52 @@ def test_existing_issue_updated_and_project_failure_retried_without_duplicate(tm
         issue = {"number": 1, "node_id": "I_1", "html_url": "https://github.com/owner/repo/issues/1"}
         github.create_issue.return_value = issue
         github.update_issue_body.return_value = issue
+        github.get_issue.return_value = {**issue, "body": ""}
+        github.project.return_value = {"id": "P_1"}
         github.add_to_project.side_effect = [RuntimeError("unavailable"), None]
         service = MigrationService(github, str(tmp_path / "db.sqlite3"))
         tracker = parse_tracker("Тип: баг\nОписание: old")
         try:
             with pytest.raises(PartialMigration):
-                await service.migrate(tracker, routes()["bug"], "discord:100", update_existing=True)
+                await service.migrate(tracker, routes()["bug"], "discord:100", operation="create_issue",
+                                      source_metadata={"scope": "post", "guild_id": 1, "forum_id": 2})
+            marker_text = github.create_issue.call_args.args[2]
+            github.get_issue.return_value = {**issue, "body": marker_text}
             updated = parse_tracker("Тип: баг\nОписание: new reply")
-            url, reused = await service.migrate(
-                updated, routes()["bug"], "discord:100", update_existing=True,
+            url, action = await service.migrate(
+                updated, routes()["bug"], "discord:100", operation="sync_forum",
+                source_metadata={"scope": "post", "guild_id": 1, "forum_id": 2},
             )
-            assert reused and url == issue["html_url"]
+            assert action == "updated" and url == issue["html_url"]
             github.create_issue.assert_awaited_once()
             assert "new reply" in github.update_issue_body.call_args.args[2]
-            assert "ss220-tracker:" in github.update_issue_body.call_args.args[2]
+            assert "ss220-begin:" in github.update_issue_body.call_args.args[2]
+        finally:
+            service.close()
+    asyncio.run(scenario())
+
+
+def test_sync_forum_skips_unlinked_source_but_create_always_creates(tmp_path):
+    async def scenario():
+        github = AsyncMock()
+        github.find_issue.return_value = None
+        github.project.return_value = {"id": "P_1"}
+        service = MigrationService(github, str(tmp_path / "db.sqlite3"))
+        tracker = parse_tracker("Тип: фича\nОписание: add export")
+        try:
+            result = await service.migrate(tracker, routes()["feature"], "discord:999",
+                                           operation="sync_forum")
+            assert result == (None, "skipped")
+            github.create_issue.assert_not_awaited()
+            github.project.assert_not_awaited()
+
+            issue = {"number": 2, "node_id": "I_2", "html_url": "https://github.com/owner/repo/issues/2"}
+            github.create_issue.return_value = issue
+            github.add_to_project.return_value = "ITEM_2"
+            url, action = await service.migrate(tracker, routes()["feature"], "discord:999",
+                                                operation="create_issue")
+            assert action == "created" and url == issue["html_url"]
+            github.create_issue.assert_awaited_once()
         finally:
             service.close()
     asyncio.run(scenario())

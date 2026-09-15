@@ -21,6 +21,31 @@ class Source:
     key: str
     url: str | None
     message_count: int = 1
+    forum_id: int | None = None
+    forum_url: str | None = None
+    thread_id: int | None = None
+    thread_url: str | None = None
+    message_id: int | None = None
+    message_url: str | None = None
+    guild_id: int | None = None
+    scope: str = "post"
+
+    def metadata(self):
+        return {
+            "version": 1, "source_key": self.key, "scope": self.scope,
+            "guild_id": self.guild_id, "forum_id": self.forum_id, "forum_url": self.forum_url,
+            "thread_id": self.thread_id, "thread_url": self.thread_url,
+            "message_id": self.message_id, "message_url": self.message_url,
+        }
+
+
+async def forum_origin(thread):
+    parent = thread.parent
+    if parent is None:
+        parent = await thread.guild.fetch_channel(thread.parent_id)
+    if isinstance(parent, discord.ForumChannel):
+        return parent.id, f"https://discord.com/channels/{thread.guild.id}/{parent.id}"
+    return None, None
 
 
 async def check_access(channel, member):
@@ -135,15 +160,40 @@ async def read_thread(thread, member, before: datetime):
         + "\n\n---\n\n".join(transcript),
     )
     # Forum starter IDs equal thread IDs: retain compatibility with old migration keys.
-    return Source(parsed, f"discord:{thread.id}", thread.jump_url, count)
+    forum_id, forum_url = await forum_origin(thread)
+    return Source(
+        parsed, f"discord:{thread.id}", thread.jump_url, count,
+        forum_id, forum_url, thread.id, thread.jump_url, thread.id,
+        f"https://discord.com/channels/{thread.guild.id}/{thread.id}/{thread.id}",
+        thread.guild.id, "post",
+    )
 
 
-async def read_single(channel_or_text, message_id, member, before):
+async def read_single(channel_or_text, message_id, member, before, *, scope="post"):
+    if scope not in {"post", "message"}:
+        raise ValueError("scope должен быть post или message")
     if isinstance(channel_or_text, str):
+        if scope == "message":
+            raise ValueError("Для scope:message нужна ссылка на конкретное сообщение")
         key = f"text:{member.guild.id}:" + hashlib.sha256(channel_or_text.encode()).hexdigest()
-        return Source(parse_tracker(channel_or_text), key, None)
-    if isinstance(channel_or_text, discord.Thread):
+        return Source(parse_tracker(channel_or_text), key, None, guild_id=member.guild.id, scope="text")
+    if isinstance(channel_or_text, discord.Thread) and scope == "post":
         return await read_thread(channel_or_text, member, before)
+    if not message_id:
+        raise ValueError("Для scope:message нужна ссылка на конкретное сообщение")
     await check_access(channel_or_text, member)
     message = await channel_or_text.fetch_message(message_id)
-    return Source(parse_tracker(message_text(message)), f"discord:{message.id}", message.jump_url)
+    if message.created_at >= before:
+        raise ValueError("Сообщение создано после начала задания; запустите новое задание")
+    is_thread = isinstance(channel_or_text, discord.Thread)
+    forum_id, forum_url = await forum_origin(channel_or_text) if is_thread else (None, None)
+    tags = [tag.name for tag in channel_or_text.applied_tags] if is_thread else ()
+    parsed = parse_tracker(message_text(message), tags=tags)
+    # A selected comment, including the starter, is a different source from the whole post.
+    key = f"discord-message:{message.id}" if is_thread else f"discord:{message.id}"
+    return Source(
+        parsed, key, message.jump_url,
+        1, forum_id, forum_url, channel_or_text.id if is_thread else None,
+        channel_or_text.jump_url if is_thread else None, message.id, message.jump_url,
+        channel_or_text.guild.id, "message",
+    )

@@ -12,6 +12,7 @@ import discord
 import httpx
 
 from .github import GitHubError
+from .provenance import check_size, render_section, source_hash
 from .service import PartialMigration, resolve_route
 from .sources import forum_threads, read_single
 
@@ -53,14 +54,26 @@ class Jobs:
             raise ValueError("Отчёт доступен только инициатору на том же сервере")
         return report
 
-    def start(self, interaction, target, message_id, repository):
+    def start(self, interaction, target, message_id, repository, operation="sync_forum",
+              issue_number=None, scope="auto"):
+        if operation not in {"sync_forum", "create_issue"} or scope not in {"auto", "post", "message"}:
+            raise ValueError("Недопустимая операция или область источника")
+        if issue_number is not None:
+            if operation != "sync_forum" or type(issue_number) is not int or issue_number <= 0:
+                raise ValueError("issue_number должен быть положительным и доступен только для sync_forum")
+            if isinstance(target, discord.ForumChannel):
+                raise ValueError("Для issue_number укажите конкретный пост или комментарий, не весь форум")
+        if scope == "message" and (not message_id or isinstance(target, (str, discord.ForumChannel))):
+            raise ValueError("Для scope:message укажите ссылку на конкретное сообщение")
         guild_id = interaction.guild_id
         if guild_id in self.guild_jobs:
             raise ValueError(f"На сервере уже выполняется задание {self.guild_jobs[guild_id]}")
         job_id = uuid4().hex
         report = {
             "id": job_id, "guild_id": guild_id, "user_id": interaction.user.id,
-            "state": "running", "dry_run": self.bot.dry_run,
+            "state": "running", "dry_run": self.bot.dry_run, "operation": operation,
+            "issue_number": issue_number,
+            "scope": scope,
             "started_at": datetime.now(UTC).isoformat(), "results": [],
         }
         self.save(report)
@@ -95,35 +108,46 @@ class Jobs:
             self.guild_jobs.pop(report["guild_id"], None)
             self.tasks.pop(report["id"], None)
 
-    async def process(self, report, guild, target, message_id, repository, before):
+    async def process(self, report, guild, target, message_id, repository, before, *, operation=None,
+                      issue_number=None):
+        operation = operation or report.get("operation", "sync_forum")
+        if issue_number is None:
+            issue_number = report.get("issue_number")
         result = {"source_id": getattr(target, "id", None)}
         try:
             # Refresh member roles for each post during a long-running scan.
             member = await guild.fetch_member(report["user_id"])
             if not isinstance(target, str) and not target.permissions_for(member).manage_messages:
                 raise ValueError("У инициатора больше нет Manage Messages в исходном канале")
-            source = await read_single(target, message_id, member, before)
+            source = await read_single(
+                target, message_id, member, before,
+                scope=(("message" if message_id else "post") if report.get("scope", "auto") == "auto"
+                       else report["scope"]),
+            )
             route = resolve_route(self.bot.routes, source.tracker.kind, repository)
             result.update(
                 title=source.tracker.title, messages=source.message_count, repository=route["repository"],
                 source=source.url, summary=source.tracker.summary,
                 labels=sorted(set(source.tracker.labels + tuple(route.get("labels", [])))),
                 project_number=route["project_number"],
+                operation=operation, scope=source.scope,
+                forum_id=source.forum_id, forum_url=source.forum_url,
+                thread_id=source.thread_id, thread_url=source.thread_url,
+                message_id=source.message_id, message_url=source.message_url,
             )
-            # Same full-body size check as service, including source URL and marker.
-            overhead = len(f"\n\n<!-- ss220-tracker:{'0' * 64} -->")
-            if source.url:
-                overhead += len(f"\n\n## Источник\n\n{source.url}")
-            if len(source.tracker.issue_body()) + overhead > 60000:
-                raise ValueError("История слишком большая для одного Issue; разделите пост перед миграцией")
+            check_size(render_section(
+                source.tracker, source_hash(route["repository"], source.key), source.url, source.metadata(),
+            ))
             if self.bot.dry_run:
                 result["state"] = "dry_run"
+                result["note"] = "Проверен источник; существование/размер целевого Issue не проверялись"
             else:
-                url, reused = await self.bot.service.migrate(
+                url, action = await self.bot.service.migrate(
                     source.tracker, route, source.key, source.url,
-                    update_existing=isinstance(target, discord.Thread),
+                    operation=operation, issue_number=issue_number,
+                    source_metadata=source.metadata(),
                 )
-                result.update(state="reused" if reused else "created", issue=url)
+                result.update(state=action, issue=url)
         except PartialMigration as error:
             result.update(state="partial", error=safe_error(error), issue=error.url)
         except (ValueError, GitHubError, discord.HTTPException, httpx.HTTPError) as error:

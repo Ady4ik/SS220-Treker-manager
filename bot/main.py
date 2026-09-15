@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 import discord
 from discord import app_commands
@@ -20,11 +21,17 @@ from .sources import resolve_source
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.checks.has_permissions(manage_messages=True)
 @app_commands.describe(
-    source="Ссылка на форум, пост, сообщение или текст; без аргумента — весь форум",
+    source="Ссылка на форум, пост или сообщение; без аргумента — весь форум",
     repository="owner/repository из настроенного маршрута",
+    operation="sync_forum обновляет существующие Issue; create_issue создаёт Issue из источника",
+    issue_number="При sync_forum дополнительно обновить указанный Issue",
+    scope="auto: ссылка на сообщение читает комментарий; post: весь пост; message: один комментарий",
 )
 async def migrate(interaction: discord.Interaction, source: str | None = None,
-                  repository: str | None = None):
+                  repository: str | None = None,
+                  operation: Literal["sync_forum", "create_issue"] = "sync_forum",
+                  issue_number: int | None = None,
+                  scope: Literal["auto", "post", "message"] = "auto"):
     await interaction.response.defer(ephemeral=True)
     bot = interaction.client
     try:
@@ -32,11 +39,14 @@ async def migrate(interaction: discord.Interaction, source: str | None = None,
         target, message_id = await resolve_source(
             interaction, source, int(default_forum) if default_forum else None,
         )
-        for kind in ("bug", "feature"):
-            resolve_route(bot.routes, kind)
-        job_id = bot.jobs.start(interaction, target, message_id, repository)
+        if operation not in {"sync_forum", "create_issue"}:
+            raise ValueError("operation должен быть sync_forum или create_issue")
+        job_id = bot.jobs.start(interaction, target, message_id, repository, operation, issue_number, scope)
         await interaction.followup.send(
-            f"Задание `{job_id}` запущено. Один пост → один Issue с полной историей.\n"
+            f"Задание `{job_id}` запущено: `{operation}`, scope:`{scope}`.\n"
+            + ("Создание новых Issue, даже для ранее перенесённых источников.\n"
+               if operation == "create_issue" else "Только обновление связанных Issue; новые не создаются.\n")
+            +
             f"Режим: {'dry-run (без записи в GitHub)' if bot.dry_run else 'запись в GitHub'}.\n"
             f"Проверить: `/migration-status job_id:{job_id}`",
             ephemeral=True,
@@ -67,7 +77,27 @@ async def migration_status(interaction: discord.Interaction, job_id: str, report
         await interaction.followup.send(str(exc), ephemeral=True)
 
 
+@app_commands.command(name="forum-sync", description="Синхронизировать только уже связанные Issue форума")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.describe(source="Ссылка на форум; без аргумента — DISCORD_FORUM_CHANNEL_ID")
+async def forum_sync(interaction: discord.Interaction, source: str | None = None):
+    await migrate.callback(interaction, source, None, "sync_forum", None)
+
+
+@app_commands.command(name="issue-from-source", description="Создать новый Issue из поста или сообщения")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.describe(source="Ссылка на пост или сообщение Discord")
+async def issue_from_source(interaction: discord.Interaction, source: str):
+    await migrate.callback(interaction, source, None, "create_issue", None)
+
+
 @migrate.error
+@forum_sync.error
+@issue_from_source.error
 async def migrate_error(interaction, error):
     if not interaction.response.is_done():
         await interaction.response.send_message(
@@ -85,6 +115,8 @@ class Bot(discord.Client):
         self.service = MigrationService(self.github, database)
         self.tree = app_commands.CommandTree(self)
         self.tree.add_command(migrate)
+        self.tree.add_command(forum_sync)
+        self.tree.add_command(issue_from_source)
         self.tree.add_command(migration_status)
         self.jobs = Jobs(self, os.getenv("JOBS_DIRECTORY", "data/jobs"))
 
