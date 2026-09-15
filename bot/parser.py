@@ -3,38 +3,61 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+ALIASES = {"bug": "bug", "баг": "bug", "feature": "feature", "фича": "feature", "enhancement": "feature"}
+TITLE = re.compile(r"^(?:заголовок|title|тема)\s*:\s*(.+)$", re.IGNORECASE)
+META = re.compile(r"^(тип|type|теги|tags?|labels?)\s*:\s*(.+)$", re.IGNORECASE)
+SECTIONS = {
+    "описание": "Описание", "description": "Описание",
+    "шаги": "Шаги воспроизведения", "шаги воспроизведения": "Шаги воспроизведения",
+    "steps": "Шаги воспроизведения", "ожидаемый результат": "Ожидаемый результат",
+    "expected": "Ожидаемый результат", "фактический результат": "Фактический результат",
+    "actual": "Фактический результат", "окружение": "Окружение", "environment": "Окружение",
+}
+
 
 @dataclass(frozen=True)
 class Tracker:
     kind: str
     title: str
     description: str
-    labels: tuple[str, ...] = ()
+    summary: str
+    labels: tuple[str, ...]
 
-    def issue_body(self) -> str:
-        details = self.description or "_Описание не указано._"
-        return f"## Summary\n\n**Type:** `{self.kind}`\n\n## Tracker\n\n{details}"
-
-
-_KIND = re.compile(r"(?:тип|type)\s*:\s*(bug|баг|feature|фича)\b", re.I)
-_TITLE = re.compile(r"(?:заголовок|title|тема)\s*:\s*(.+)", re.I)
-_LABELS = re.compile(r"(?:теги|labels?)\s*:\s*(.+)", re.I)
+    def issue_body(self):
+        return (f"## Summary\n\n{self.summary}\n\n**Тип:** `{self.kind}`"
+                f"\n\n## Основные элементы\n\n{self.description}")
 
 
-def parse_tracker(text: str) -> Tracker:
-    """Parse a tracker while retaining unknown content in the description."""
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        raise ValueError("Трекер пустой")
-    kind_match = _KIND.search(text)
-    raw_kind = kind_match.group(1).lower() if kind_match else "feature"
-    kind = "bug" if raw_kind in {"bug", "баг"} else "feature"
-    title_match = next((m for line in lines if (m := _TITLE.match(line))), None)
-    title = title_match.group(1).strip() if title_match else lines[0][:120]
-    labels = {"bug" if kind == "bug" else "enhancement"}
-    labels_match = _LABELS.search(text)
-    if labels_match:
-        labels.update(x.strip().lower() for x in labels_match.group(1).split(",") if x.strip())
-    description = "\n".join(line for line in lines if not _TITLE.match(line) and not _KIND.match(line) and not _LABELS.match(line))
-    return Tracker(kind, title, description, tuple(sorted(labels)))
-
+def parse_tracker(text: str, tags=(), title=None) -> Tracker:
+    """Extract a short summary and sections without inventing tracker information."""
+    if not text.strip():
+        raise ValueError("Трекер пустой или Message Content Intent не включён")
+    all_tags = {tag.strip().casefold() for tag in tags}
+    content = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"^[#\s]+", "", line).replace("**", "")
+        if match := TITLE.match(cleaned):
+            title = match[1].strip()
+        elif match := META.match(cleaned):
+            all_tags.update(t.strip().casefold() for t in re.split(r"[,;]", match[2]))
+        else:
+            content.append(line)
+    kinds = {ALIASES[t] for t in all_tags if t in ALIASES}
+    if len(kinds) != 1:
+        raise ValueError("Нужен ровно один тег типа: баг/bug или фича/feature")
+    kind = kinds.pop()
+    raw = "\n".join(content).strip()
+    if not title:
+        title = next((line.strip() for line in content if line.strip()), "Трекер")[:120]
+    if len(title) > 256:
+        title = title[:253] + "..."
+    highlights = []
+    for line in raw.splitlines():
+        key, sep, value = line.partition(":")
+        heading = SECTIONS.get(key.strip().strip("#* ").casefold()) if sep else None
+        highlights.append(f"\n### {heading}\n\n{value.strip()}" if heading else line)
+    summary = re.sub(r"\s+", " ", raw) or title
+    if len(summary) > 600:
+        summary = summary[:597].rsplit(" ", 1)[0] + "..."
+    label = "bug" if kind == "bug" else "enhancement"
+    return Tracker(kind, title, "\n".join(highlights).strip() or title, summary, (label,))

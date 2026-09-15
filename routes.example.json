@@ -1,0 +1,20 @@
+{
+  "bug": {
+    "repository": "OWNER/TARGET_REPOSITORY",
+    "labels": ["triage"],
+    "project_owner": "OWNER",
+    "project_owner_type": "organization",
+    "project_number": 1,
+    "status_field": "Status",
+    "status": "Todo"
+  },
+  "feature": {
+    "repository": "OWNER/TARGET_REPOSITORY",
+    "labels": ["triage"],
+    "project_owner": "OWNER",
+    "project_owner_type": "organization",
+    "project_number": 2,
+    "status_field": "Status",
+    "status": "Todo"
+  }
+}
