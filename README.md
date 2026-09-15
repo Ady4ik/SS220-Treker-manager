@@ -25,15 +25,24 @@ Discord-бот для переноса всего Discord Forum в GitHub Issues
 ```powershell
 py -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-Copy-Item routes.example.json routes.json
+New-Item .env
+New-Item routes.json
 ```
 
 1. В Discord Developer Portal создайте application и bot. Включите **Message Content Intent**. Пригласите бота со scopes `bot` и `applications.commands`, правами View Channels, Read Message History, Send Messages и Send Messages in Threads. Для приватных тредов бот должен быть участником.
 2. Укажите `DISCORD_TOKEN` в `.env`. `DISCORD_GUILD_ID` ускоряет регистрацию команды на тестовом сервере; без него команда глобальная и может появиться с задержкой.
 3. Укажите `GITHUB_TOKEN`: например, classic PAT с `repo` и `project`, доступом к целевому репозиторию и Project. При использовании fine-grained PAT нужны Issues read/write и соответствующее разрешение Projects read/write у владельца; проверьте доступ к обоим ресурсам и SSO организации.
 4. В `routes.json` замените примеры на реальные репозитории и борды. `project_number` — номер из URL `/users/OWNER/projects/N` или `/orgs/OWNER/projects/N`; `project_owner_type` — `user` или `organization`. `status_field` и `status` должны точно совпадать с названиями в Project. Удалите `status`, если нужно лишь добавление на борду.
-5. Добавьте `DISCORD_FORUM_CHANNEL_ID=1385519706781253632` в `.env` для вашего форума. Запустите `.venv\Scripts\python -m bot` и проверьте `/migrate` в режиме dry-run. Затем установите `DRY_RUN=false` и перезапустите.
+5. Добавьте в `.env` `DISCORD_FORUM_CHANNEL_ID=1385519706781253632`, `DRY_RUN=true`, `ROUTES_FILE=routes.json` и `DATABASE_PATH=data/migrations.sqlite3`. Структуру `routes.json` возьмите из примера ниже. Запустите `.venv\Scripts\python -m bot` и проверьте `/migrate` в режиме dry-run. Затем установите `DRY_RUN=false` и перезапустите.
+
+Минимальная структура `routes.json`:
+
+```json
+{
+  "bug": {"repository": "OWNER/REPOSITORY", "labels": ["triage"], "project_owner": "OWNER", "project_owner_type": "organization", "project_number": 1, "status": "Todo"},
+  "feature": {"repository": "OWNER/REPOSITORY", "labels": ["triage"], "project_owner": "OWNER", "project_owner_type": "organization", "project_number": 2, "status": "Todo"}
+}
+```
 
 Репозиторий кода бота и репозиторий назначения Issue могут быть разными. Дополнительный аргумент `repository` должен совпадать с маршрутом данного типа. Другие теги не переносятся произвольно: нужные labels укажите в маршруте.
 
