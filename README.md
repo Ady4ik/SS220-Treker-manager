@@ -3,6 +3,15 @@
 Discord-бот для переноса всего Discord Forum в GitHub Issues и GitHub Projects v2 по команде `/migrate`.
 Форум: `https://discord.com/channels/1097181193939730453/1385519706781253632`.
 
+## Лицензия
+
+Проект использует лицензионную модель SS220:
+
+- `LICENSE.TXT` — условия SS220 для сборки и связанных материалов;
+- `MIT_LICENSE.TXT` — MIT-лицензия исходного кода этого бота.
+
+Отдельные сторонние библиотеки и сервисы остаются под их собственными лицензиями. Для этого репозитория адаптация MIT copyright указана на `Ady4ik / SS220 Treker Manager`; она не заменяет лицензию исходного репозитория Space Station 14.
+
 ## Быстрый старт
 
 1. Создайте Discord-бота, включите **Message Content Intent** и добавьте его на сервер с правами `View Channels`, `Read Message History`, `Send Messages` и `Send Messages in Threads`.
