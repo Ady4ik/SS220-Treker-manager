@@ -3,6 +3,57 @@
 Discord-бот для переноса всего Discord Forum в GitHub Issues и GitHub Projects v2 по команде `/migrate`.
 Форум: `https://discord.com/channels/1097181193939730453/1385519706781253632`.
 
+## Быстрый старт
+
+1. Создайте Discord-бота, включите **Message Content Intent** и добавьте его на сервер с правами `View Channels`, `Read Message History`, `Send Messages` и `Send Messages in Threads`.
+2. Создайте GitHub token с доступом к Issues и Projects целевого репозитория.
+3. Создайте `.env` и `routes.json`, установите зависимости и запустите бота:
+
+```powershell
+py -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+Copy-Item routes.example.json routes.json
+.venv\Scripts\python -m bot
+```
+
+4. Оставьте `DRY_RUN=true` и сначала проверьте команду на тестовом посте. Для реальной миграции установите `DRY_RUN=false` и перезапустите процесс.
+
+Для текущего форума используйте `DISCORD_FORUM_CHANNEL_ID=1385519706781253632` и `DISCORD_GUILD_ID=1097181193939730453`.
+
+## Команды бота
+
+| Команда | Основное назначение | Важные параметры | Поведение |
+| --- | --- | --- | --- |
+| `/migrate` | Универсальная команда миграции форума, поста или сообщения | `source`, `operation`, `scope`, `repository`, `issue_number` | По умолчанию работает как `sync_forum`: новые Issue не создаёт, обновляет только связанные |
+| `/forum-sync` | Синхронизация всего форума | `source` | Короткая форма `/migrate operation:sync_forum`; пропускает посты без существующей связи |
+| `/issue-from-source` | Явное создание нового Issue | `source` | Короткая форма `/migrate operation:create_issue`; создаёт новый Issue из поста или сообщения |
+| `/migration-status` | Проверка фонового задания | `job_id`, `report_file` | Показывает состояние, количество постов/сообщений и ошибки; `report_file:true` прикладывает JSON-отчёт |
+
+### Параметры `/migrate`
+
+| Параметр | Значения | Когда нужен |
+| --- | --- | --- |
+| `source` | Ссылка на форум, пост или Discord-сообщение | Не нужен, если задан `DISCORD_FORUM_CHANNEL_ID`; без него внутри поста берётся родительский форум |
+| `operation` | `sync_forum` или `create_issue` | `sync_forum` только обновляет связанные Issue; `create_issue` создаёт новый Issue |
+| `scope` | `auto`, `post`, `message` | `post` читает весь пост; `message` читает только выбранное сообщение; `auto` выбирает по типу ссылки |
+| `repository` | `OWNER/REPOSITORY` | Необходим только для переопределения репозитория из `routes.json`; значение должно совпадать с маршрутом типа |
+| `issue_number` | Положительное число | Только для `sync_forum`, чтобы обновить конкретный связанный Issue |
+
+## Типовые сценарии
+
+| Задача | Команда |
+| --- | --- |
+| Проверить весь форум без записи в GitHub | `/migrate source:<ссылка на форум>` при `DRY_RUN=true` |
+| Создать новые Issue из всех постов форума | `/migrate operation:create_issue source:<ссылка на форум>` |
+| Синхронизировать только уже перенесённые посты | `/forum-sync source:<ссылка на форум>` |
+| Создать Issue из одного поста со всей историей | `/issue-from-source source:<ссылка на пост>` |
+| Создать Issue только из одного комментария | `/issue-from-source source:<ссылка на комментарий>` или `/migrate operation:create_issue scope:message source:<ссылка>` |
+| Прочитать весь пост по ссылке на комментарий | `/migrate operation:create_issue scope:post source:<ссылка на комментарий>` |
+| Добавить комментарий в конкретный Issue того же форума | `/migrate operation:sync_forum scope:message source:<ссылка на комментарий> issue_number:42` |
+| Посмотреть прогресс | `/migration-status job_id:<ID>` |
+| Скачать полный отчёт | `/migration-status job_id:<ID> report_file:true` |
+
 ## Возможности
 
 - `/migrate` по умолчанию использует `operation:sync_forum`: читает активные и архивные посты, но **обновляет только связанные Issue**, новые не создаёт.
