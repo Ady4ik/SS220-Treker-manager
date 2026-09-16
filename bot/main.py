@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 from .github import GitHubClient
 from .issue_forms import default_routes
 from .jobs import Jobs, safe_error, status_text
+from .responses import acknowledge, reply
 from .service import MigrationService, resolve_route
 from .sources import resolve_source
 
@@ -48,7 +50,8 @@ async def migrate(interaction: discord.Interaction, source: str | None = None,
                   map_name: Literal["Frankenstein", "Axioma", "Donuts", "Eclipse", "Astro",
                                     "Nightshift", "Tox", "Другое"] = "Другое",
                   needs_discussion: bool = False):
-    await interaction.response.defer(ephemeral=True)
+    if not await acknowledge(interaction):
+        return
     bot = interaction.client
     try:
         default_forum = os.getenv("DISCORD_FORUM_CHANNEL_ID")
@@ -59,24 +62,25 @@ async def migrate(interaction: discord.Interaction, source: str | None = None,
             raise ValueError("operation должен быть sync_forum или create_issue")
         job_id = bot.jobs.start(interaction, target, message_id, repository, operation, issue_number, scope,
                                report_type, volume, map_name, needs_discussion)
-        await interaction.followup.send(
+        logging.getLogger(__name__).info("Migration job started: %s", job_id)
+        await reply(interaction,
             f"Задание `{job_id}` запущено: `{operation}`, scope:`{scope}`.\n"
             + ("Создание новых Issue, даже для ранее перенесённых источников.\n"
                if operation == "create_issue" else "Только обновление связанных Issue; новые не создаются.\n")
             +
             f"Режим: {'dry-run (без записи в GitHub)' if bot.dry_run else 'запись в GitHub'}.\n"
             f"Проверить: `/migration-status job_id:{job_id}`",
-            ephemeral=True,
         )
     except Exception as exc:  # noqa: BLE001 - command boundary must report every failure safely.
-        await interaction.followup.send(safe_error(exc), ephemeral=True)
+        await reply(interaction, safe_error(exc))
 
 
 @app_commands.command(name="migration-status", description="Прогресс и отчёт миграции форума")
 @app_commands.guild_only()
 @app_commands.describe(job_id="ID задания из ответа /migrate", report_file="Скачать полный JSON-отчёт")
 async def migration_status(interaction: discord.Interaction, job_id: str, report_file: bool = False):
-    await interaction.response.defer(ephemeral=True)
+    if not await acknowledge(interaction):
+        return
     try:
         report = interaction.client.jobs.load(job_id, interaction.guild_id, interaction.user.id)
         kwargs = {}
@@ -85,13 +89,12 @@ async def migration_status(interaction: discord.Interaction, job_id: str, report
             if len(payload) <= interaction.guild.filesize_limit:
                 kwargs["file"] = discord.File(io.BytesIO(payload), filename=f"{job_id}.json")
             else:
-                await interaction.followup.send(
+                await reply(interaction,
                     "Отчёт превышает лимит вложения Discord; он сохранён в каталоге заданий на хосте бота.",
-                    ephemeral=True,
                 )
-        await interaction.followup.send(status_text(report)[:1900], ephemeral=True, **kwargs)
+        await reply(interaction, status_text(report)[:1900], **kwargs)
     except ValueError as exc:
-        await interaction.followup.send(str(exc), ephemeral=True)
+        await reply(interaction, str(exc))
 
 
 @app_commands.command(name="forum-sync", description="Синхронизировать только уже связанные Issue форума")
@@ -115,11 +118,16 @@ async def issue_from_source(interaction: discord.Interaction, source: str):
 @migrate.error
 @forum_sync.error
 @issue_from_source.error
+@migration_status.error
 async def migrate_error(interaction, error):
-    if not interaction.response.is_done():
-        await interaction.response.send_message(
-            "Команда доступна только на сервере участникам с правом Manage Messages.", ephemeral=True,
-        )
+    original = getattr(error, "original", error)
+    if isinstance(original, (discord.HTTPException, discord.InteractionResponded, OSError)):
+        logging.getLogger(__name__).warning("Command transport failure: %s; no retry", type(original).__name__)
+        return
+    if isinstance(error, app_commands.CheckFailure):
+        await reply(interaction, "Команда доступна только на сервере участникам с правом Manage Messages.")
+    else:
+        await reply(interaction, safe_error(original))
 
 
 class Bot(discord.Client):
