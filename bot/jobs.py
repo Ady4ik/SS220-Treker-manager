@@ -12,6 +12,7 @@ import discord
 import httpx
 
 from .github import GitHubError
+from .issue_forms import format_source
 from .provenance import check_size, render_section, source_hash
 from .service import PartialMigration, resolve_route
 from .sources import forum_threads, read_single
@@ -55,7 +56,10 @@ class Jobs:
         return report
 
     def start(self, interaction, target, message_id, repository, operation="sync_forum",
-              issue_number=None, scope="auto"):
+              issue_number=None, scope="auto", report_type="auto", volume="Средний",
+              map_name="Другое", needs_discussion=False):
+        if report_type not in {"auto", "feature", "bug", "mapping"}:
+            raise ValueError("Неизвестный тип шаблона")
         if operation not in {"sync_forum", "create_issue"} or scope not in {"auto", "post", "message"}:
             raise ValueError("Недопустимая операция или область источника")
         if issue_number is not None:
@@ -74,6 +78,8 @@ class Jobs:
             "state": "running", "dry_run": self.bot.dry_run, "operation": operation,
             "issue_number": issue_number,
             "scope": scope,
+            "report_type": report_type, "volume": volume, "map_name": map_name,
+            "needs_discussion": needs_discussion,
             "started_at": datetime.now(UTC).isoformat(), "results": [],
         }
         self.save(report)
@@ -123,6 +129,11 @@ class Jobs:
                 target, message_id, member, before,
                 scope=(("message" if message_id else "post") if report.get("scope", "auto") == "auto"
                        else report["scope"]),
+                kind_override=None if report.get("report_type", "auto") == "auto" else report["report_type"],
+            )
+            source = format_source(
+                source, volume=report.get("volume", "Средний"), map_name=report.get("map_name", "Другое"),
+                needs_discussion=report.get("needs_discussion", False),
             )
             route = resolve_route(self.bot.routes, source.tracker.kind, repository)
             result.update(
@@ -131,6 +142,7 @@ class Jobs:
                 labels=sorted(set(source.tracker.labels + tuple(route.get("labels", [])))),
                 project_number=route["project_number"],
                 operation=operation, scope=source.scope,
+                report_type=source.tracker.kind,
                 forum_id=source.forum_id, forum_url=source.forum_url,
                 thread_id=source.thread_id, thread_url=source.thread_url,
                 message_id=source.message_id, message_url=source.message_url,

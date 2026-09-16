@@ -11,6 +11,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 from .github import GitHubClient
+from .issue_forms import default_routes
 from .jobs import Jobs, safe_error, status_text
 from .service import MigrationService, resolve_route
 from .sources import resolve_source
@@ -20,18 +21,33 @@ from .sources import resolve_source
 @app_commands.guild_only()
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.choices(report_type=[
+    app_commands.Choice(name="По тегам трекера", value="auto"),
+    app_commands.Choice(name="Перенести идею из SS14-Трекер", value="feature"),
+    app_commands.Choice(name="Сообщить об ошибке", value="bug"),
+    app_commands.Choice(name="Сообщить о проблеме с игровой картой", value="mapping"),
+])
 @app_commands.describe(
     source="Ссылка на форум, пост или сообщение; без аргумента — весь форум",
     repository="owner/repository из настроенного маршрута",
     operation="sync_forum обновляет существующие Issue; create_issue создаёт Issue из источника",
     issue_number="При sync_forum дополнительно обновить указанный Issue",
     scope="auto: ссылка на сообщение читает комментарий; post: весь пост; message: один комментарий",
+    report_type="Шаблон и маршрут; явный выбор переопределяет теги всех выбранных постов",
+    volume="Объём идеи",
+    map_name="Карта для проблемы маппинга",
+    needs_discussion="Идея требует обсуждения руководителем",
 )
 async def migrate(interaction: discord.Interaction, source: str | None = None,
                   repository: str | None = None,
                   operation: Literal["sync_forum", "create_issue"] = "sync_forum",
                   issue_number: int | None = None,
-                  scope: Literal["auto", "post", "message"] = "auto"):
+                  scope: Literal["auto", "post", "message"] = "auto",
+                  report_type: str = "auto",
+                  volume: Literal["Малый", "Средний", "Большой"] = "Средний",
+                  map_name: Literal["Frankenstein", "Axioma", "Donuts", "Eclipse", "Astro",
+                                    "Nightshift", "Tox", "Другое"] = "Другое",
+                  needs_discussion: bool = False):
     await interaction.response.defer(ephemeral=True)
     bot = interaction.client
     try:
@@ -41,7 +57,8 @@ async def migrate(interaction: discord.Interaction, source: str | None = None,
         )
         if operation not in {"sync_forum", "create_issue"}:
             raise ValueError("operation должен быть sync_forum или create_issue")
-        job_id = bot.jobs.start(interaction, target, message_id, repository, operation, issue_number, scope)
+        job_id = bot.jobs.start(interaction, target, message_id, repository, operation, issue_number, scope,
+                               report_type, volume, map_name, needs_discussion)
         await interaction.followup.send(
             f"Задание `{job_id}` запущено: `{operation}`, scope:`{scope}`.\n"
             + ("Создание новых Issue, даже для ранее перенесённых источников.\n"
@@ -143,7 +160,12 @@ def main():
     github_token = os.getenv("GITHUB_TOKEN", "")
     if not token or (not dry_run and not github_token):
         raise SystemExit("Заполните DISCORD_TOKEN и GITHUB_TOKEN в .env")
-    routes = json.loads(Path(os.getenv("ROUTES_FILE", "routes.json")).read_text(encoding="utf-8-sig"))
-    for kind in ("bug", "feature"):
+    routes = default_routes()
+    route_path = Path(os.getenv("ROUTES_FILE", "routes.json"))
+    if route_path.exists():
+        configured = json.loads(route_path.read_text(encoding="utf-8-sig"))
+        for kind, route in configured.items():
+            routes[kind] = {**routes.get(kind, {}), **route}
+    for kind in ("bug", "feature", "mapping"):
         resolve_route(routes, kind)
     Bot(routes, github_token, dry_run, os.getenv("DATABASE_PATH", "data/migrations.sqlite3")).run(token)

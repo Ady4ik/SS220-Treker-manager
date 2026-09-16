@@ -21,8 +21,8 @@ Discord-бот для переноса всего Discord Forum в GitHub Issues
 ```powershell
 py -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-Copy-Item routes.example.json routes.json
+New-Item .env
+# Заполните .env перед запуском; routes.json необязателен.
 .venv\Scripts\python -m bot
 ```
 
@@ -31,6 +31,48 @@ Copy-Item routes.example.json routes.json
 Для текущего форума используйте `DISCORD_FORUM_CHANNEL_ID=1385519706781253632` и `DISCORD_GUILD_ID=1097181193939730453`.
 
 ## Команды бота
+
+### Шаблоны и маршруты
+
+В `/migrate` есть параметр **`report_type`** с отдельными вариантами для обычной ошибки и проблемы карты. Приложенные YAML сохранены без изменений в `templates/`. Бот формирует Markdown по полям формы и передаёт labels через API; интерфейс выбора формы GitHub он не открывает.
+
+| Значение `report_type` | Название в Discord | Репозиторий по умолчанию | Labels шаблона |
+| --- | --- | --- | --- |
+| `auto` | По тегам трекера | Определяется типом | Определяются шаблоном |
+| `feature` | Перенести идею из SS14-Трекер | `SerbiaStrong-220/DevTeam220` | `Features`, `V: Small` / `V: Medium` / `V: Large` |
+| `bug` | Сообщить об ошибке | `SerbiaStrong-220/space-station-14` | `triage` |
+| `mapping` | Сообщить о проблеме с игровой картой | `SerbiaStrong-220/space-station-14` | `Mapping Issues` |
+
+| Параметр | Значения и поведение |
+| --- | --- |
+| `volume` | `Малый`, `Средний` (по умолчанию), `Большой`; применяется к идеям |
+| `needs_discussion` | Требуется обсуждение руководителем; для среднего/большого объёма включается также автоматически по условию чекбокса шаблона. Добавляет `Need head’s discuss` |
+| `map_name` | `Frankenstein`, `Axioma`, `Donuts`, `Eclipse`, `Astro`, `Nightshift`, `Tox`, `Другое` (по умолчанию); применяется только к `mapping` |
+
+```text
+/migrate operation:create_issue report_type:feature source:<ссылка на пост> volume:Средний
+/migrate operation:create_issue report_type:bug source:<ссылка на пост>
+/migrate operation:create_issue report_type:mapping source:<ссылка на пост> map_name:Axioma
+/migrate operation:sync_forum report_type:mapping source:<ссылка на пост> map_name:Axioma
+```
+
+Явный `report_type` переопределяет теги **всех источников задания**. Для смешанного форума используйте `auto`: `bug/баг`, `feature/фича/enhancement`, `mapping/Mapping Issues/проблема карты`. Неизвестный тип не угадывается. Для комментария добавьте `scope:message`. При синхронизации сохраняйте тот же тип и параметры формы, с которыми создавали Issue.
+
+У идеи заголовок начинается с `[F]:`, ссылка на Discord обязательна. Автоматический перенос не подтверждает за пользователя полноту описания: обязательный чекбокс об этом остаётся снятым и требует проверки человеком. Шаги багов извлекаются только из явно указанного поля; при отсутствии стоят «Не указаны». История, Summary и ссылки на вложения сохраняются. Типичные тексты и примеры из placeholders не выдаются за факты.
+
+Без `routes.json` работают маршруты выше. У идей используется `SerbiaStrong-220/30` из YAML. У обоих видов багов борда не указана в шаблонах: Issue создаётся без Project. Для назначения борды задайте `project_number`, `project_owner` и `project_owner_type` в соответствующем маршруте `bug` или `mapping`; `project_number: null` отключает добавление на борду.
+
+**Существующий `routes.json` имеет приоритет над значениями по умолчанию.** Проверьте старые `repository`, labels и номера проектов перед запуском. Пример разделения:
+
+```json
+{
+  "feature": {"repository": "SerbiaStrong-220/DevTeam220", "labels": [], "project_number": 30},
+  "bug": {"repository": "SerbiaStrong-220/space-station-14", "labels": [], "project_number": null},
+  "mapping": {"repository": "SerbiaStrong-220/space-station-14", "labels": [], "project_number": null}
+}
+```
+
+Смена репозитория не переносит уже созданные Issue между репозиториями: ключ связи включает репозиторий. `sync_forum` пропустит источник без связи в новом назначении. Сначала проверьте dry-run; для нового назначения создание запускается явно.
 
 | Команда | Основное назначение | Важные параметры | Поведение |
 | --- | --- | --- | --- |
@@ -69,7 +111,7 @@ Copy-Item routes.example.json routes.json
 - `/migrate operation:create_issue source:<ссылка на форум>` создаёт отдельный новый Issue для каждого поста. **Повторный create создаёт новые Issue**, это намеренная операция, а не синхронизация.
 - Ссылка на пост читает весь пост и его ответы. Ссылка на конкретный комментарий по умолчанию читает **только этот комментарий**.
 - `scope:post` читает весь пост даже по ссылке на комментарий; `scope:message` требует конкретную ссылку на сообщение. Ключи поста и отдельного комментария различаются.
-- `баг/bug` → label `bug`; `фича/feature` → `enhancement`. Неизвестный или конфликтующий тип возвращает ошибку.
+- Labels берутся из формы: `triage` для обычной ошибки, `Mapping Issues` для карты, `Features` для идеи. Неизвестный или конфликтующий тип в режиме `auto` возвращает ошибку.
 - Summary — краткая выдержка до 600 символов. Основной текст сохраняется и разбивается по известным полям: описание, шаги, ожидаемый/фактический результат, окружение. Это локальный разбор без LLM.
 - Отдельный маршрут каждого типа задаёт репозиторий, дополнительные labels, Project и Status. Недостающие labels создаются.
 - В Issue записывается видимый блок **«Источник Discord»**: ссылки и ID сервера, форума, поста и сообщения, область `post/message`. Для обычного текстового канала поля форума отсутствуют. Ссылки на вложения сохраняются без скачивания файлов и могут истечь.
@@ -107,7 +149,7 @@ Copy-Item routes.example.json routes.json
 py -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 New-Item .env
-New-Item routes.json
+# routes.json создавайте только для переопределения маршрутов.
 ```
 
 1. В Discord Developer Portal создайте application и bot. Включите **Message Content Intent**. Пригласите бота со scopes `bot` и `applications.commands`, правами View Channels, Read Message History, Send Messages и Send Messages in Threads. Для приватных тредов бот должен быть участником.
@@ -120,8 +162,9 @@ New-Item routes.json
 
 ```json
 {
-  "bug": {"repository": "OWNER/REPOSITORY", "labels": ["triage"], "project_owner": "OWNER", "project_owner_type": "organization", "project_number": 1, "status": "Todo"},
-  "feature": {"repository": "OWNER/REPOSITORY", "labels": ["triage"], "project_owner": "OWNER", "project_owner_type": "organization", "project_number": 2, "status": "Todo"}
+  "feature": {"repository": "SerbiaStrong-220/DevTeam220", "labels": [], "project_owner": "SerbiaStrong-220", "project_owner_type": "organization", "project_number": 30},
+  "bug": {"repository": "SerbiaStrong-220/space-station-14", "labels": [], "project_number": null},
+  "mapping": {"repository": "SerbiaStrong-220/space-station-14", "labels": [], "project_number": null}
 }
 ```
 

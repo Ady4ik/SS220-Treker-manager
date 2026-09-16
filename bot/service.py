@@ -23,9 +23,9 @@ def resolve_route(routes, kind, repository=None):
     if not isinstance(labels, list) or any(not isinstance(x, str) or not 0 < len(x) <= 50 for x in labels):
         raise ValueError("labels должен быть списком имён длиной 1–50 символов")
     number = route.get("project_number")
-    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+    if number is not None and (not isinstance(number, int) or isinstance(number, bool) or number <= 0):
         raise ValueError("Укажите положительный project_number")
-    if not route.get("project_owner"):
+    if number is not None and not route.get("project_owner"):
         raise ValueError("Укажите project_owner")
     if route.get("project_owner_type", "organization") not in {"user", "organization"}:
         raise ValueError("project_owner_type должен быть user или organization")
@@ -102,7 +102,7 @@ class MigrationService:
             body = merge_section(current_body, section, key) if operation == "sync_forum" else section
             if not issue or operation == "sync_forum":
                 check_size(body)
-            project = await self.github.project(route)
+            project = await self.github.project(route) if route.get("project_number") else None
             if issue is None:
                 await self.github.ensure_labels(repo, labels)
                 issue = await self.github.create_issue(repo, tracker.title, body, labels)
@@ -125,7 +125,8 @@ class MigrationService:
                 )
             self.db.commit()
             try:
-                await self.github.add_to_project(project, issue["node_id"])
+                if project:
+                    await self.github.add_to_project(project, issue["node_id"])
             except Exception as exc:
                 raise PartialMigration(issue["html_url"]) from exc
             return issue["html_url"], action

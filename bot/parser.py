@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 ALIASES = {"bug": "bug", "баг": "bug", "feature": "feature", "фича": "feature", "enhancement": "feature"}
+ALIASES.update({"mapping": "mapping", "mapping issues": "mapping", "проблема карты": "mapping"})
 TITLE = re.compile(r"^(?:заголовок|title|тема)\s*:\s*(.+)$", re.IGNORECASE)
 META = re.compile(r"^(тип|type|теги|tags?|labels?)\s*:\s*(.+)$", re.IGNORECASE)
 SECTIONS = {
@@ -22,13 +23,16 @@ class Tracker:
     description: str
     summary: str
     labels: tuple[str, ...]
+    formatted_body: str | None = None
 
     def issue_body(self):
+        if self.formatted_body is not None:
+            return self.formatted_body
         return (f"## Summary\n\n{self.summary}\n\n**Тип:** `{self.kind}`"
                 f"\n\n## Основные элементы\n\n{self.description}")
 
 
-def parse_tracker(text: str, tags=(), title=None) -> Tracker:
+def parse_tracker(text: str, tags=(), title=None, kind_override=None) -> Tracker:
     """Extract a short summary and sections without inventing tracker information."""
     if not text.strip():
         raise ValueError("Трекер пустой или Message Content Intent не включён")
@@ -43,6 +47,12 @@ def parse_tracker(text: str, tags=(), title=None) -> Tracker:
         else:
             content.append(line)
     kinds = {ALIASES[t] for t in all_tags if t in ALIASES}
+    if kind_override:
+        if kind_override not in {"bug", "feature", "mapping"}:
+            raise ValueError("Неизвестный тип шаблона")
+        kinds = {kind_override}
+    elif kinds == {"mapping", "bug"}:
+        kinds = {"mapping"}
     if len(kinds) != 1:
         raise ValueError("Нужен ровно один тег типа: баг/bug или фича/feature")
     kind = kinds.pop()
@@ -59,5 +69,5 @@ def parse_tracker(text: str, tags=(), title=None) -> Tracker:
     summary = re.sub(r"\s+", " ", raw) or title
     if len(summary) > 600:
         summary = summary[:597].rsplit(" ", 1)[0] + "..."
-    label = "bug" if kind == "bug" else "enhancement"
+    label = {"bug": "bug", "feature": "enhancement", "mapping": "Mapping Issues"}[kind]
     return Tracker(kind, title, "\n".join(highlights).strip() or title, summary, (label,))

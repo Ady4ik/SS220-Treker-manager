@@ -126,7 +126,7 @@ def message_text(message):
     return "\n\n".join(parts)
 
 
-async def read_thread(thread, member, before: datetime):
+async def read_thread(thread, member, before: datetime, *, kind_override=None):
     await check_access(thread, member)
     transcript, starter, excerpts = [], None, []
     count, has_content = 0, False
@@ -150,6 +150,7 @@ async def read_thread(thread, member, before: datetime):
     parsed = parse_tracker(
         starter or "Исходное сообщение отсутствует; см. полную историю ниже.",
         tags=[tag.name for tag in thread.applied_tags], title=thread.name,
+        kind_override=kind_override,
     )
     summary = parsed.summary
     if excerpts:
@@ -169,16 +170,17 @@ async def read_thread(thread, member, before: datetime):
     )
 
 
-async def read_single(channel_or_text, message_id, member, before, *, scope="post"):
+async def read_single(channel_or_text, message_id, member, before, *, scope="post", kind_override=None):
     if scope not in {"post", "message"}:
         raise ValueError("scope должен быть post или message")
     if isinstance(channel_or_text, str):
         if scope == "message":
             raise ValueError("Для scope:message нужна ссылка на конкретное сообщение")
         key = f"text:{member.guild.id}:" + hashlib.sha256(channel_or_text.encode()).hexdigest()
-        return Source(parse_tracker(channel_or_text), key, None, guild_id=member.guild.id, scope="text")
+        return Source(parse_tracker(channel_or_text, kind_override=kind_override),
+                      key, None, guild_id=member.guild.id, scope="text")
     if isinstance(channel_or_text, discord.Thread) and scope == "post":
-        return await read_thread(channel_or_text, member, before)
+        return await read_thread(channel_or_text, member, before, kind_override=kind_override)
     if not message_id:
         raise ValueError("Для scope:message нужна ссылка на конкретное сообщение")
     await check_access(channel_or_text, member)
@@ -188,7 +190,7 @@ async def read_single(channel_or_text, message_id, member, before, *, scope="pos
     is_thread = isinstance(channel_or_text, discord.Thread)
     forum_id, forum_url = await forum_origin(channel_or_text) if is_thread else (None, None)
     tags = [tag.name for tag in channel_or_text.applied_tags] if is_thread else ()
-    parsed = parse_tracker(message_text(message), tags=tags)
+    parsed = parse_tracker(message_text(message), tags=tags, kind_override=kind_override)
     # A selected comment, including the starter, is a different source from the whole post.
     key = f"discord-message:{message.id}" if is_thread else f"discord:{message.id}"
     return Source(
