@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import httpx
 
+from .github_app import AppAuthError
+
 
 class GitHubError(RuntimeError):
     pass
 
 
 class GitHubClient:
-    def __init__(self, token, transport=None):
+    def __init__(self, token="", transport=None, app_auth=None):
+        self.app_auth = app_auth
         self.client = httpx.AsyncClient(
             base_url="https://api.github.com",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+            headers={"Accept": "application/vnd.github+json",
+                     **({"Authorization": f"Bearer {token}"} if token and not app_auth else {})},
             timeout=30, transport=transport,
         )
 
@@ -19,6 +23,12 @@ class GitHubClient:
         await self.client.aclose()
 
     async def request(self, method, path, **kwargs):
+        if self.app_auth:
+            try:
+                authorization = await self.app_auth.authorization(self.client)
+            except AppAuthError as exc:
+                raise GitHubError(str(exc)) from exc
+            kwargs["headers"] = {**kwargs.get("headers", {}), "Authorization": authorization}
         response = await self.client.request(method, path, **kwargs)
         if response.is_error:
             raise GitHubError(f"GitHub HTTP {response.status_code}")

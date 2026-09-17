@@ -12,6 +12,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 from .github import GitHubClient
+from .github_app import auth_from_env
 from .issue_forms import default_routes
 from .jobs import Jobs, safe_error, status_text
 from .responses import acknowledge, reply
@@ -131,12 +132,12 @@ async def migrate_error(interaction, error):
 
 
 class Bot(discord.Client):
-    def __init__(self, routes, token, dry_run=True, database="data/migrations.sqlite3"):
+    def __init__(self, routes, token, dry_run=True, database="data/migrations.sqlite3", app_auth=None):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
         self.routes, self.dry_run = routes, dry_run
-        self.github = GitHubClient(token)
+        self.github = GitHubClient(token, app_auth=app_auth)
         self.service = MigrationService(self.github, database)
         self.tree = app_commands.CommandTree(self)
         self.tree.add_command(migrate)
@@ -166,8 +167,12 @@ def main():
     token = os.getenv("DISCORD_TOKEN")
     dry_run = os.getenv("DRY_RUN", "true").lower() == "true"
     github_token = os.getenv("GITHUB_TOKEN", "")
-    if not token or (not dry_run and not github_token):
-        raise SystemExit("Заполните DISCORD_TOKEN и GITHUB_TOKEN в .env")
+    try:
+        app_auth = auth_from_env(os.environ)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    if not token or (not dry_run and not github_token and app_auth is None):
+        raise SystemExit("Заполните DISCORD_TOKEN и настройте GitHub App либо GITHUB_TOKEN")
     routes = default_routes()
     route_path = Path(os.getenv("ROUTES_FILE", "routes.json"))
     if route_path.exists():
@@ -176,4 +181,5 @@ def main():
             routes[kind] = {**routes.get(kind, {}), **route}
     for kind in ("bug", "feature", "mapping"):
         resolve_route(routes, kind)
-    Bot(routes, github_token, dry_run, os.getenv("DATABASE_PATH", "data/migrations.sqlite3")).run(token)
+    Bot(routes, github_token, dry_run, os.getenv("DATABASE_PATH", "data/migrations.sqlite3"),
+        app_auth=app_auth).run(token)

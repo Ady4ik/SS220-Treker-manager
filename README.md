@@ -14,6 +14,39 @@ Discord-бот для переноса всего Discord Forum в GitHub Issues
 
 ## Быстрый старт
 
+### Авторизация через GitHub App
+
+Поддерживается серверная авторизация установки приложения (без OAuth-входа пользователя).
+**Client Secret не нужен.** Настройте `.env`:
+
+```env
+GITHUB_AUTH_MODE=app
+GITHUB_APP_ID=123456
+GITHUB_INSTALLATION_ID=12345678
+GITHUB_PRIVATE_KEY_PATH=D:/SS220/secrets/tracker-bot.pem
+# Необязательно: Client ID приложения вместо App ID как issuer JWT
+GITHUB_APP_CLIENT_ID=
+```
+
+Installation ID — не App ID и не Client ID. Его можно взять из URL страницы установленного приложения в настройках организации: `.../settings/installations/12345678`.
+Приватный RSA-ключ `.pem` храните вне репозитория; не присылайте его в чат. `*.pem`, `*.key` и `secrets/` исключены из Git.
+
+Бот подписывает JWT, получает installation access token и обновляет его за две минуты до истечения срока. Токен хранится только в памяти и используется для REST и GraphQL. В режиме `app` старое `GITHUB_TOKEN` игнорируется. Системное время компьютера должно быть корректным. Client Secret и пользовательский OAuth для этого сценария не используются.
+
+Приложение должно иметь доступ к **обоим** репозиториям назначения, если используются и идеи, и баги. Нужны Repository permissions → Issues: Read and write; для борды организации — Organization permissions → Projects: Read and write. После изменения разрешений одобрите их для установки. Установка только на одном репозитории не даёт доступ ко второму.
+
+Для старого режима готового токена используйте `GITHUB_AUTH_MODE=token` (значение по умолчанию) и `GITHUB_TOKEN`. Проверка через `/user` не подходит для installation token.
+
+После обновления кода установите новые зависимости и перезапустите:
+
+```powershell
+git pull
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m bot
+```
+
+`DRY_RUN=true` не проверяет доступ к GitHub. При HTTP 401 во время получения installation token проверьте App/Client ID, Installation ID, ключ и часы; при отказе на запросе Issues/Project — также разрешения установки. Бот не повторяет автоматически создание Issue после ошибки API.
+
 1. Создайте Discord-бота, включите **Message Content Intent** и добавьте его на сервер с правами `View Channels`, `Read Message History`, `Send Messages` и `Send Messages in Threads`.
 2. Создайте GitHub token с доступом к Issues и Projects целевого репозитория.
 3. Создайте `.env` и `routes.json`, установите зависимости и запустите бота:
